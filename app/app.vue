@@ -1,12 +1,20 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed } from 'vue'
 import BackgroundOrbs from '~/components/onboarding/BackgroundOrbs.vue'
 import OnboardingHeader from '~/components/onboarding/OnboardingHeader.vue'
 import VisualsDisplay from '~/components/onboarding/VisualsDisplay.vue'
 import StepForms from '~/components/onboarding/StepForms.vue'
+import { createAuthClient } from "better-auth/vue"
+
+// --- Better Auth client ---
+const authClient = createAuthClient({
+    baseURL: `${useRuntimeConfig().public.apiBaseUrl}/auth`
+})
+
+// Get session data
+const session = authClient.useSession()
 
 // --- State ---
-const STORAGE_KEY = "lumosnap_state_v2"
 const step = ref(1)
 const direction = ref(1)
 const formData = ref({
@@ -14,30 +22,8 @@ const formData = ref({
   insta: ''
 })
 
-// --- Persistence ---
-onMounted(() => {
-  const saved = localStorage.getItem(STORAGE_KEY)
-  if (saved) {
-    try {
-      const parsed = JSON.parse(saved)
-      step.value = parsed.step || 1
-      direction.value = parsed.direction || 1
-      if (parsed.data) {
-        formData.value = { ...formData.value, ...parsed.data }
-      }
-    } catch (e) {
-      localStorage.removeItem(STORAGE_KEY)
-    }
-  }
-})
-
-watch([step, formData], () => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    step: step.value,
-    direction: direction.value,
-    data: formData.value
-  }))
-}, { deep: true })
+// Authentication status
+const isAuthenticated = computed(() => !!session.value?.data?.user)
 
 // --- Actions ---
 const onStepUpdate = (newStep: number) => {
@@ -46,12 +32,7 @@ const onStepUpdate = (newStep: number) => {
   step.value = newStep
 }
 
-const onReset = () => {
-  localStorage.removeItem(STORAGE_KEY)
-  step.value = 1
-  direction.value = 1
-  formData.value = { business: '', insta: '' }
-}
+
 </script>
 
 <template>
@@ -65,8 +46,7 @@ const onReset = () => {
         <VisualsDisplay :step="step" />
 
         <!-- Right: Forms -->
-        <StepForms :step="step" :direction="direction" v-model:data="formData" @update:step="onStepUpdate"
-          @reset="onReset" />
+        <StepForms :step="step" :direction="direction" v-model:data="formData" :is-authenticated="isAuthenticated" @update:step="onStepUpdate" />
       </div>
     </main>
 

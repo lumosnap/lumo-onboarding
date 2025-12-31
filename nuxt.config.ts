@@ -4,9 +4,10 @@ export default defineNuxtConfig({
   css: ['~/assets/css/main.css'],
   runtimeConfig: {
     public: {
-      authBaseUrl: 'https://lumo-worker.super-meadow-a0ca.workers.dev/api/auth'
+      apiBaseUrl: 'https://lumo-worker.super-meadow-a0ca.workers.dev/'
     }
   },
+  ssr:false,
 
   devtools: { enabled: true }
 })

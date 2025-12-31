@@ -1,21 +1,22 @@
 <script setup lang="ts">
 import { ref, watch, computed, nextTick, onMounted } from 'vue'
-import { ChevronLeft, Loader2, Check, ArrowRight, Instagram, Monitor, Laptop } from 'lucide-vue-next'
+import { Loader2, Check, ArrowRight, Instagram, Monitor, Laptop, Zap } from 'lucide-vue-next'
 import { createAuthClient } from "better-auth/vue"
 
 // useRoute is auto-imported in Nuxt 4
 const route = useRoute()
+// Route is auto-imported in Nuxt 4
 
 const props = defineProps<{
     step: number
     direction: number
     data: { business: string; insta: string }
+    isAuthenticated: boolean
 }>()
 
 const emit = defineEmits<{
     (e: 'update:step', step: number): void
     (e: 'update:data', data: { business: string; insta: string }): void
-    (e: 'reset'): void
 }>()
 
 const localData = computed({
@@ -25,19 +26,12 @@ const localData = computed({
 
 const isLoading = ref(false)
 const dlLoading = ref(false)
-const error = ref('')
+const isProfileCompleted = ref(false)
+const isProfileLoading = ref(false)
 
 // Better Auth client
 const authClient = createAuthClient({
-    baseURL: useRuntimeConfig().public.authBaseUrl
-})
-
-// Reactive state
-const isSignUp = ref(false)
-const formData = ref({
-    name: '',
-    email: '',
-    password: ''
+    baseURL: `${useRuntimeConfig().public.apiBaseUrl}/auth`
 })
 
 // Get session data
@@ -60,9 +54,9 @@ const base64Encode = (str: string): string => {
 }
 
 /**
- * Redirect to callback URL with token and user data
+ * Send token and user data to callback URL via fetch
  */
-const redirectToCallback = () => {
+const sendToCallback = async () => {
     if (!callbackUrl.value || !session.value?.data) {
         return
     }
@@ -71,7 +65,7 @@ const redirectToCallback = () => {
     const user = session.value.data.user
 
     if (!token || !user) {
-        error.value = 'Failed to get authentication token or user data'
+        console.error('Failed to get authentication token or user data')
         return
     }
 
@@ -79,11 +73,102 @@ const redirectToCallback = () => {
     const userJson = JSON.stringify(user)
     const base64User = base64Encode(userJson)
 
-    // Construct callback URL with parameters
-    const finalCallbackUrl = `${callbackUrl.value}?token=${encodeURIComponent(token)}&user=${encodeURIComponent(base64User)}`
+    try {
+        await fetch(`${callbackUrl.value}?token=${encodeURIComponent(token)}&user=${encodeURIComponent(base64User)}`, {
+            method: 'GET'
+        })
+    } catch (err) {
+        console.error('Failed to send to callback URL:', err)
+    }
+}
 
-    // Redirect to callback URL
-    window.location.href = finalCallbackUrl
+/**
+ * Fetch user profile to check completion status
+ */
+const fetchProfile = async () => {
+    try {
+        isProfileLoading.value = true
+        const token = session.value?.data?.session?.token
+        if (!token) {
+            throw new Error('No authentication token available')
+        }
+
+        const response = await fetch(`${useRuntimeConfig().public.apiBaseUrl}/v1/profile`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            }
+        })
+
+        if (!response.ok) {
+            throw new Error('Failed to fetch profile')
+        }
+
+        const profileData = await response.json()
+        
+        // Access nested data property
+        if (profileData.data) {
+            isProfileCompleted.value = profileData.data.profileCompleted === true
+            
+            // If profile has data, pre-fill the form
+            if (profileData.data.businessName) {
+                emit('update:data', { business: profileData.data.businessName, insta: props.data.insta })
+            }
+            if (profileData.data.instaId) {
+                emit('update:data', { business: props.data.business, insta: profileData.data.instaId })
+            }
+        }
+
+        return profileData
+    } catch (err: any) {
+        throw err
+    } finally {
+        isProfileLoading.value = false
+    }
+}
+
+/**
+ * Update user profile with business and Instagram details
+ */
+const updateProfile = async () => {
+    isProfileLoading.value = true
+    const token = session.value?.data?.session?.token
+    if (!token) {
+        isProfileLoading.value = false
+        throw new Error('No authentication token available')
+    }
+
+    try {
+        const response = await fetch(`${useRuntimeConfig().public.apiBaseUrl}/v1/profile`, {
+            method: 'PATCH',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                businessName: localData.value.business,
+                instaId: localData.value.insta
+            })
+        })
+
+        if (!response.ok) {
+            throw new Error('Failed to update profile')
+        }
+
+        const profileData = await response.json()
+        
+        // Access nested data property
+        if (profileData.data) {
+            isProfileCompleted.value = profileData.data.profileCompleted === true
+        }
+        
+        return profileData
+    } catch (err: any) {
+        throw err
+    } finally {
+        isProfileLoading.value = false
+    }
 }
 
 /**
@@ -93,77 +178,30 @@ const handleAuthSuccess = async () => {
     // Wait a bit for session to be available
     await new Promise(resolve => setTimeout(resolve, 100))
 
-    // Redirect to callback URL if available
-    if (callbackUrl.value) {
-        redirectToCallback()
-    } else {
-        // Continue to next step in onboarding
+    try {
+        // Fetch profile to determine next step
+        await fetchProfile()
+
+        // If profile is completed, go to ready for launch screen
+        if (isProfileCompleted.value) {
+            emit('update:step', 4)
+        } else {
+            // Determine which step to go to based on filled data
+            if (localData.value.business && localData.value.insta) {
+                emit('update:step', 4)
+            } else if (localData.value.business) {
+                emit('update:step', 3)
+            } else {
+                emit('update:step', 2)
+            }
+        }
+    } catch (err) {
+        // If profile fetch fails, default to step 2
         emit('update:step', 2)
     }
 }
 
-// Toggle between sign in and sign up
-const toggleMode = () => {
-    isSignUp.value = !isSignUp.value
-    error.value = ''
-    formData.value = { name: '', email: '', password: '' }
-}
 
-// Handle email/password sign in or sign up
-const handleSubmit = async () => {
-    try {
-        isLoading.value = true
-        error.value = ''
-
-        if (isSignUp.value) {
-            // Sign up
-            const result = await authClient.signUp.email({
-                email: formData.value.email,
-                password: formData.value.password,
-                name: formData.value.name,
-            }, {
-                onSuccess: async (ctx) => {
-                    console.log('Sign up successful', ctx)
-                    await handleAuthSuccess()
-                },
-                onError: (ctx) => {
-                    error.value = ctx.error.message
-                    isLoading.value = false
-                }
-            })
-        } else {
-            // Sign in
-            const result = await authClient.signIn.email({
-                email: formData.value.email,
-                password: formData.value.password,
-            }, {
-                onSuccess: async (ctx) => {
-                    console.log('Sign in successful', ctx)
-                    await handleAuthSuccess()
-                },
-                onError: (ctx) => {
-                    error.value = ctx.error.message
-                    isLoading.value = false
-                }
-            })
-        }
-    } catch (err: any) {
-        error.value = err.message || (isSignUp.value ? 'Sign up failed' : 'Sign in failed')
-        isLoading.value = false
-    }
-}
-
-// Handle sign out
-const handleSignOut = async () => {
-    try {
-        isLoading.value = true
-        await authClient.signOut()
-        isLoading.value = false
-    } catch (err: any) {
-        error.value = err.message || 'Sign out failed'
-        isLoading.value = false
-    }
-}
 
 // Refs for inputs
 const businessInput = ref<HTMLInputElement | null>(null)
@@ -181,34 +219,41 @@ watch(() => props.step, async (newStep) => {
 
 onMounted(async () => {
     await nextTick()
+    
+    // If user is already authenticated, check profile status first
+    // This ensures we're on the correct step before setting focus
+    if (session.value?.data) {
+        await handleAuthSuccess()
+    }
+    
+    // Set focus after step is determined
+    await nextTick()
     if (props.step === 2) {
         businessInput.value?.focus()
     } else if (props.step === 3) {
         instaInput.value?.focus()
     }
-
-    // If user is already authenticated and callback URL exists, redirect
-    if (session.value?.data && callbackUrl.value) {
-        await redirectToCallback()
-    } else if (session.value?.data && props.step === 1) {
-        // If already logged in and on step 1, move to step 2
-        emit('update:step', 2)
-    }
 })
 
 // Watch for session changes (for OAuth callback handling)
-watch(() => session.value?.data, (newData) => {
-    if (newData && newData.session?.token && newData.user) {
-        console.log('Session detected after OAuth callback')
-        if (callbackUrl.value) {
-            setTimeout(() => {
-                redirectToCallback()
-            }, 500)
-        } else if (props.step === 1) {
-            emit('update:step', 2)
-        }
+watch(() => session.value?.data, async (newData, oldData) => {
+    const hasSession = newData && newData.session?.token && newData.user
+    const hadSession = oldData && oldData.session?.token && oldData.user
+
+    // User just logged in (session appeared)
+    if (hasSession && !hadSession) {
+        // Fetch profile and determine appropriate step
+        await handleAuthSuccess()
     }
-}, { immediate: true })
+})
+
+// Auto-send token when on step 4 with active session and callback URL
+watch([() => props.step, () => callbackUrl.value], async ([newStep, newCallbackUrl]) => {
+    if (newStep === 4 && newCallbackUrl && session.value?.data?.session?.token) {
+        // Send token to callback URL via GET request
+        await sendToCallback()
+    }
+})
 
 // Validation
 const isBusinessValid = computed(() => localData.value.business.length > 2)
@@ -216,35 +261,40 @@ const isInstaValid = computed(() => localData.value.insta.length > 1)
 
 // Actions
 const startGoogle = async () => {
-    try {
-        isLoading.value = true
-        error.value = ''
+    isLoading.value = true
 
-        await authClient.signIn.social({
-            provider: 'google',
-            callbackURL: callbackUrl.value ? '/' : undefined // This logic might need adjustment based on how callbackUrl is structured
-        })
+    // Redirect back to the current page after OAuth completes
+    await authClient.signIn.social({
+        provider: 'google',
+        callbackURL: window.location.href
+    })
 
-        // Note: OAuth redirect will handle the callback
-        // The handleAuthSuccess or watch session will be called after redirect back
-    } catch (err: any) {
-        error.value = err.message || 'Google sign in failed'
-        isLoading.value = false
+    // OAuth redirect will handle the callback automatically
+    // Better Auth will redirect to callbackURL after successful authentication
+}
+
+const next = async () => {
+    // If on step 3 (Instagram input), update profile before proceeding
+    if (props.step === 3) {
+        try {
+            await updateProfile()
+            emit('update:step', props.step + 1)
+        } catch (err) {
+            // Error is handled in updateProfile
+        }
+    } else {
+        emit('update:step', props.step + 1)
     }
 }
 
-const next = () => {
-    emit('update:step', props.step + 1)
-}
-
-const download = () => {
+const download = async () => {
     if (dlLoading.value) return
     dlLoading.value = true
+    
+    // Show loading feedback
     setTimeout(() => {
         dlLoading.value = false
-        alert("Onboarding Complete! Resetting demo.")
-        emit('reset')
-    }, 2000)
+    }, 1500)
 }
 
 // Enter key handlers
@@ -269,6 +319,15 @@ const onInstaEnter = () => {
             <h1>Deliver your <br> <span class="gradient-text">masterpiece.</span></h1>
             <p class="subtitle">The premium tool for creators to curate, package, and wow clients with zero friction.
             </p>
+
+            <!-- Show unauthorized message if not authenticated -->
+            <ClientOnly>
+                <div v-if="!isAuthenticated && !isLoading" style="background: var(--red-50); border: 1px solid var(--red-200); padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+                    <p style="color: var(--red-600); font-size: 0.875rem; font-weight: 500; margin: 0;">
+                        Please sign in to continue
+                    </p>
+                </div>
+            </ClientOnly>
 
             <button class="btn-google" @click="startGoogle" :disabled="isLoading">
                 <div v-if="isLoading" class="loader-overlay">
@@ -376,9 +435,9 @@ const onInstaEnter = () => {
                 <p class="dl-meta">Running natively on <strong style="color:var(--zinc-900)">Apple Silicon</strong> for
                     maximum color accuracy.</p>
 
-                <button class="btn-dl" :class="{ loading: dlLoading }" @click="download">
+                <button class="btn-dl" :class="{ loading: dlLoading }" @click="download" :disabled="dlLoading">
                     <div class="loading-bar"></div>
-                    <Monitor :size="20" /> Download <span style="font-weight:400; opacity:0.7">for macOS</span>
+                    <Monitor :size="20" /> {{ callbackUrl ? 'Launch App' : 'Download' }} <span style="font-weight:400; opacity:0.7">{{ callbackUrl ? '' : 'for macOS' }}</span>
                 </button>
             </div>
 
@@ -403,34 +462,7 @@ const onInstaEnter = () => {
     justify-content: center;
 }
 
-.back-btn {
-    position: absolute;
-    top: -3.5rem;
-    left: -0.75rem;
-    background: none;
-    border: none;
-    color: var(--zinc-400);
-    font-weight: 600;
-    font-size: 0.875rem;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    padding: 0.5rem;
-    border-radius: 0.5rem;
-    transition: all 0.3s;
-}
 
-.back-btn:hover {
-    color: var(--zinc-800);
-    background: rgba(0, 0, 0, 0.05);
-}
-
-.back-btn.hidden {
-    opacity: 0;
-    pointer-events: none;
-    transform: translateY(0.5rem);
-}
 
 .step-container {
     display: none;
