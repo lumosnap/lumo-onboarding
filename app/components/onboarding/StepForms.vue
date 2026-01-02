@@ -75,7 +75,8 @@ const sendToCallback = async () => {
 
     try {
         await fetch(`${callbackUrl.value}?token=${encodeURIComponent(token)}&user=${encodeURIComponent(base64User)}`, {
-            method: 'GET'
+            method: 'GET',
+            mode: 'no-cors'
         })
     } catch (err) {
         console.error('Failed to send to callback URL:', err)
