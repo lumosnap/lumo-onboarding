@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, computed, nextTick, onMounted } from 'vue'
-import { Loader2, Check, ArrowRight, Instagram, Monitor, Laptop, Zap } from 'lucide-vue-next'
+import { Loader2, Check, ArrowRight, Instagram, Monitor, Laptop, Zap, Apple, X, Download, Copy, ExternalLink } from 'lucide-vue-next'
 import { createAuthClient } from "better-auth/vue"
 
 // useRoute is auto-imported in Nuxt 4
@@ -28,6 +28,146 @@ const isLoading = ref(false)
 const dlLoading = ref(false)
 const isProfileCompleted = ref(false)
 const isProfileLoading = ref(false)
+
+// Modal states
+const showPlatformsModal = ref(false)
+const copiedChecksum = ref<string | null>(null)
+
+// OS Detection
+type OSType = 'macos' | 'windows' | 'linux' | 'unknown'
+
+const detectedOS = ref<OSType>('unknown')
+
+const detectOS = (): OSType => {
+    if (typeof window === 'undefined') return 'unknown'
+    
+    const userAgent = window.navigator.userAgent.toLowerCase()
+    const platform = window.navigator.platform?.toLowerCase() || ''
+    
+    if (platform.includes('mac') || userAgent.includes('mac')) {
+        return 'macos'
+    } else if (platform.includes('win') || userAgent.includes('win')) {
+        return 'windows'
+    } else if (platform.includes('linux') || userAgent.includes('linux')) {
+        return 'linux'
+    }
+    
+    return 'unknown'
+}
+
+// Download packages configuration
+const RELEASE_VERSION = 'v0.1.3-alpha'
+const RELEASE_BASE_URL = 'https://github.com/lumosnap/lumo-desktop/releases/download'
+
+interface DownloadPackage {
+    name: string
+    filename: string
+    url: string
+    size: string
+    checksum: string
+    os: OSType
+    isPrimary?: boolean
+}
+
+const downloadPackages: DownloadPackage[] = [
+    // macOS
+    {
+        name: 'macOS (DMG)',
+        filename: 'lumosnap-0.1.1-alpha.dmg',
+        url: `${RELEASE_BASE_URL}/${RELEASE_VERSION}/lumosnap-0.1.1-alpha.dmg`,
+        size: '127 MB',
+        checksum: 'sha256:85173fffba4c2e82b5630790c4defe9a9193d73ce2daaf781a375e88f6d01786',
+        os: 'macos',
+        isPrimary: true
+    },
+    // Windows
+    {
+        name: 'Windows (Installer)',
+        filename: 'lumosnap-0.1.1-alpha-setup.exe',
+        url: `${RELEASE_BASE_URL}/${RELEASE_VERSION}/lumosnap-0.1.1-alpha-setup.exe`,
+        size: '109 MB',
+        checksum: 'sha256:bec6627a0f056d4ef112dc3528bc7b8f0b49334c64ec2f46d59523d013bd89f7',
+        os: 'windows',
+        isPrimary: true
+    },
+    // Linux - AppImage (primary)
+    {
+        name: 'Linux (AppImage)',
+        filename: 'lumosnap-0.1.1-alpha.AppImage',
+        url: `${RELEASE_BASE_URL}/${RELEASE_VERSION}/lumosnap-0.1.1-alpha.AppImage`,
+        size: '147 MB',
+        checksum: 'sha256:d1504e1dbd87ecaffd035dee1dfc45f01a9774050fc69dc1bd84041eee7f3406',
+        os: 'linux',
+        isPrimary: true
+    },
+    // Linux - DEB
+    {
+        name: 'Linux (DEB)',
+        filename: 'lumosnap_0.1.1-alpha_amd64.deb',
+        url: `${RELEASE_BASE_URL}/${RELEASE_VERSION}/lumosnap_0.1.1-alpha_amd64.deb`,
+        size: '94.9 MB',
+        checksum: 'sha256:d4f01f233aea8f08a08cbf9ab53e879f53170f848c3e695f5a081b90e104ac8c',
+        os: 'linux'
+    },
+    // Linux - Snap
+    {
+        name: 'Linux (Snap)',
+        filename: 'lumosnap_0.1.1-alpha_amd64.snap',
+        url: `${RELEASE_BASE_URL}/${RELEASE_VERSION}/lumosnap_0.1.1-alpha_amd64.snap`,
+        size: '124 MB',
+        checksum: 'sha256:4f49144219d44d521706c663f291102d2649e2ee31d954ab754d7e7f695154c5',
+        os: 'linux'
+    }
+]
+
+// Get primary download for current OS
+const currentOSDownload = computed(() => {
+    const os = detectedOS.value
+    return downloadPackages.find(pkg => pkg.os === os && pkg.isPrimary) || downloadPackages[0]
+})
+
+// Get OS display name
+const osDisplayName = computed(() => {
+    switch (detectedOS.value) {
+        case 'macos': return 'Apple Silicon'
+        case 'windows': return 'Windows'
+        case 'linux': return 'Linux'
+        default: return 'your system'
+    }
+})
+
+// Get OS short name for button
+const osShortName = computed(() => {
+    switch (detectedOS.value) {
+        case 'macos': return 'macOS'
+        case 'windows': return 'Windows'
+        case 'linux': return 'Linux'
+        default: return 'Desktop'
+    }
+})
+
+// Get other platforms text
+const otherPlatformsText = computed(() => {
+    switch (detectedOS.value) {
+        case 'macos': return 'Windows or Linux'
+        case 'windows': return 'macOS or Linux'
+        case 'linux': return 'macOS or Windows'
+        default: return 'other platforms'
+    }
+})
+
+// Copy checksum to clipboard
+const copyChecksum = async (checksum: string) => {
+    try {
+        await navigator.clipboard.writeText(checksum)
+        copiedChecksum.value = checksum
+        setTimeout(() => {
+            copiedChecksum.value = null
+        }, 2000)
+    } catch (err) {
+        console.error('Failed to copy checksum:', err)
+    }
+}
 
 // Better Auth client
 const authClient = createAuthClient({
@@ -219,6 +359,9 @@ watch(() => props.step, async (newStep) => {
 })
 
 onMounted(async () => {
+    // Detect OS on mount
+    detectedOS.value = detectOS()
+    
     await nextTick()
     
     // If user is already authenticated, check profile status first
@@ -292,10 +435,20 @@ const download = async () => {
     if (dlLoading.value) return
     dlLoading.value = true
     
+    // Trigger actual download
+    const pkg = currentOSDownload.value
+    if (pkg) {
+        window.open(pkg.url, '_blank')
+    }
+    
     // Show loading feedback
     setTimeout(() => {
         dlLoading.value = false
     }, 1500)
+}
+
+const launchApp = () => {
+    window.location.href = 'lumosnap://open'
 }
 
 // Enter key handlers
@@ -433,22 +586,69 @@ const onInstaEnter = () => {
                         <Check :size="10" /> Optimized
                     </span>
                 </div>
-                <p class="dl-meta">Running natively on <strong style="color:var(--zinc-900)">Apple Silicon</strong> for
+                <p class="dl-meta">Running natively on <strong style="color:var(--zinc-900)">{{ osDisplayName }}</strong> for
                     maximum color accuracy.</p>
 
-                <button class="btn-dl" :class="{ loading: dlLoading }" @click="download" :disabled="dlLoading">
-                    <div class="loading-bar"></div>
-                    <Monitor :size="20" /> {{ callbackUrl ? 'Launch App' : 'Download' }} <span style="font-weight:400; opacity:0.7">{{ callbackUrl ? '' : 'for macOS' }}</span>
-                </button>
+                <div class="btn-group">
+                    <button class="btn-dl" :class="{ loading: dlLoading }" @click="download" :disabled="dlLoading">
+                        <div class="loading-bar"></div>
+                        <Download :size="20" /> Download <span style="font-weight:400; opacity:0.7">for {{ osShortName }}</span>
+                    </button>
+                    <button class="btn-launch" @click="launchApp">
+                        <ExternalLink :size="18" /> Launch
+                    </button>
+                </div>
             </div>
 
             <div style="width:100%; text-align:center">
-                <a href="#"
+                <a href="#" @click.prevent="showPlatformsModal = true"
                     style="text-decoration:none; color:var(--zinc-400); font-size:0.875rem; font-weight:500; display:inline-flex; align-items:center; gap:0.5rem">
-                    <Laptop :size="14" /> Looking for Windows?
+                    <Laptop :size="14" /> Looking for {{ otherPlatformsText }}?
                 </a>
             </div>
         </div>
+
+
+
+        <!-- All Platforms Modal -->
+        <Teleport to="body">
+            <Transition name="modal">
+                <div v-if="showPlatformsModal" class="modal-overlay" @click.self="showPlatformsModal = false">
+                    <div class="modal-content modal-wide">
+                        <button class="modal-close" @click="showPlatformsModal = false">
+                            <X :size="20" />
+                        </button>
+                        <div class="modal-icon">
+                            <img src="/logo.png" alt="LumoSnap" class="modal-logo" />
+                        </div>
+                        <h3 class="modal-title">Download for All Platforms</h3>
+                        <p class="modal-desc">Choose the right package for your operating system.</p>
+                        
+                        <div class="packages-list">
+                            <div v-for="pkg in downloadPackages" :key="pkg.filename" class="package-item">
+                                <div class="package-info">
+                                    <div class="package-header">
+                                        <span class="package-name">{{ pkg.name }}</span>
+                                        <span class="package-size">{{ pkg.size }}</span>
+                                    </div>
+                                    <div class="package-filename">{{ pkg.filename }}</div>
+                                    <div class="package-checksum">
+                                        <span class="checksum-text">{{ pkg.checksum }}</span>
+                                        <button class="copy-btn" @click="copyChecksum(pkg.checksum)" :title="copiedChecksum === pkg.checksum ? 'Copied!' : 'Copy checksum'">
+                                            <Check v-if="copiedChecksum === pkg.checksum" :size="14" class="c-green" />
+                                            <Copy v-else :size="14" />
+                                        </button>
+                                    </div>
+                                </div>
+                                <a :href="pkg.url" class="package-download" target="_blank" rel="noopener">
+                                    <Download :size="16" />
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </Transition>
+        </Teleport>
     </div>
 </template>
 
@@ -495,5 +695,303 @@ const onInstaEnter = () => {
     display: flex;
     align-items: center;
     justify-content: center;
+}
+
+/* Button Group */
+.btn-group {
+    display: flex;
+    gap: 0.75rem;
+    width: 100%;
+}
+
+.btn-group .btn-dl {
+    flex: 1;
+}
+
+.btn-launch {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.875rem 1.25rem;
+    background: var(--zinc-100);
+    color: var(--zinc-700);
+    border: 1px solid var(--zinc-200);
+    border-radius: 0.75rem;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.btn-launch:hover {
+    background: var(--zinc-200);
+    color: var(--zinc-900);
+}
+
+/* Modal Styles */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 1rem;
+}
+
+.modal-content {
+    background: white;
+    border-radius: 1.25rem;
+    padding: 2rem;
+    max-width: 400px;
+    width: 100%;
+    position: relative;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+    text-align: center;
+}
+
+.modal-content.modal-wide {
+    max-width: 560px;
+    text-align: left;
+}
+
+.modal-close {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.5rem;
+    background: var(--zinc-100);
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--zinc-500);
+    transition: all 0.2s ease;
+}
+
+.modal-close:hover {
+    background: var(--zinc-200);
+    color: var(--zinc-700);
+}
+
+.modal-icon {
+    width: 4rem;
+    height: 4rem;
+    border-radius: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 1.5rem;
+    overflow: hidden;
+}
+
+.modal-wide .modal-icon {
+    margin: 0 0 1.5rem;
+}
+
+.modal-logo {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    border-radius: 0.5rem;
+}
+
+.modal-title {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--zinc-900);
+    margin-bottom: 0.5rem;
+}
+
+.modal-desc {
+    font-size: 0.9375rem;
+    color: var(--zinc-500);
+    margin-bottom: 1.5rem;
+    line-height: 1.5;
+}
+
+.modal-hint {
+    font-size: 0.8125rem;
+    color: var(--zinc-400);
+    margin-top: 1rem;
+}
+
+.modal-hint a {
+    color: var(--indigo-600);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.modal-hint a:hover {
+    text-decoration: underline;
+}
+
+/* Launch Primary Button */
+.btn-launch-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 1rem 1.5rem;
+    background: linear-gradient(135deg, var(--indigo-500), var(--indigo-600));
+    color: white;
+    border: none;
+    border-radius: 0.75rem;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all 0.2s ease;
+}
+
+.btn-launch-primary:hover {
+    background: linear-gradient(135deg, var(--indigo-600), var(--indigo-700));
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+}
+
+/* Packages List */
+.packages-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.package-item {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem;
+    background: var(--zinc-50);
+    border: 1px solid var(--zinc-200);
+    border-radius: 0.75rem;
+    transition: all 0.2s ease;
+}
+
+.package-item:hover {
+    border-color: var(--indigo-200);
+    background: var(--indigo-50);
+}
+
+.package-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.package-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.25rem;
+}
+
+.package-name {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: var(--zinc-900);
+}
+
+.package-size {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--zinc-500);
+    background: var(--zinc-100);
+    padding: 0.125rem 0.5rem;
+    border-radius: 0.25rem;
+}
+
+.package-filename {
+    font-size: 0.8125rem;
+    color: var(--zinc-600);
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    margin-bottom: 0.5rem;
+}
+
+.package-checksum {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.checksum-text {
+    font-size: 0.6875rem;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    color: var(--zinc-400);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 280px;
+}
+
+.copy-btn {
+    flex-shrink: 0;
+    width: 1.5rem;
+    height: 1.5rem;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: var(--zinc-400);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.25rem;
+    transition: all 0.15s ease;
+}
+
+.copy-btn:hover {
+    background: var(--zinc-100);
+    color: var(--zinc-600);
+}
+
+.package-download {
+    flex-shrink: 0;
+    width: 2.5rem;
+    height: 2.5rem;
+    background: var(--indigo-500);
+    color: white;
+    border-radius: 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    transition: all 0.2s ease;
+}
+
+.package-download:hover {
+    background: var(--indigo-600);
+    transform: scale(1.05);
+}
+
+/* Modal Transitions */
+.modal-enter-active,
+.modal-leave-active {
+    transition: all 0.3s ease;
+}
+
+.modal-enter-from,
+.modal-leave-to {
+    opacity: 0;
+}
+
+.modal-enter-from .modal-content,
+.modal-leave-to .modal-content {
+    transform: scale(0.95) translateY(10px);
+}
+
+.modal-enter-active .modal-content,
+.modal-leave-active .modal-content {
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 </style>
