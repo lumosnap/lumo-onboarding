@@ -59,6 +59,8 @@ const detectOS = (): OSType => {
 const RELEASE_VERSION = 'v0.1.3-alpha'
 const RELEASE_BASE_URL = 'https://github.com/lumosnap/lumo-desktop/releases/download'
 
+const releaseVersion = ref(RELEASE_VERSION)
+
 interface DownloadPackage {
     name: string
     filename: string
@@ -69,7 +71,7 @@ interface DownloadPackage {
     isPrimary?: boolean
 }
 
-const downloadPackages: DownloadPackage[] = [
+const downloadPackages = ref<DownloadPackage[]>([
     // macOS
     {
         name: 'macOS (DMG)',
@@ -99,31 +101,160 @@ const downloadPackages: DownloadPackage[] = [
         checksum: 'sha256:d1504e1dbd87ecaffd035dee1dfc45f01a9774050fc69dc1bd84041eee7f3406',
         os: 'linux',
         isPrimary: true
-    },
-    // Linux - DEB
-    {
-        name: 'Linux (DEB)',
-        filename: 'lumosnap_0.1.1-alpha_amd64.deb',
-        url: `${RELEASE_BASE_URL}/${RELEASE_VERSION}/lumosnap_0.1.1-alpha_amd64.deb`,
-        size: '94.9 MB',
-        checksum: 'sha256:d4f01f233aea8f08a08cbf9ab53e879f53170f848c3e695f5a081b90e104ac8c',
-        os: 'linux'
-    },
-    // Linux - Snap
-    {
-        name: 'Linux (Snap)',
-        filename: 'lumosnap_0.1.1-alpha_amd64.snap',
-        url: `${RELEASE_BASE_URL}/${RELEASE_VERSION}/lumosnap_0.1.1-alpha_amd64.snap`,
-        size: '124 MB',
-        checksum: 'sha256:4f49144219d44d521706c663f291102d2649e2ee31d954ab754d7e7f695154c5',
-        os: 'linux'
     }
-]
+])
+
+function detectPlatform(filename: string): OSType {
+    if (filename.endsWith('.dmg')) return 'macos'
+    if (filename.endsWith('.exe')) return 'windows'
+    if (filename.endsWith('.AppImage') || filename.endsWith('.deb') || filename.endsWith('.snap')) return 'linux'
+    return 'unknown'
+}
+
+function formatBytes(bytes: number, decimals = 1): string {
+    if (!+bytes) return '0 Bytes'
+    const k = 1024
+    const dm = decimals < 0 ? 0 : decimals
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB']
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`
+}
+
+function getDownloadName(filename: string, os: OSType): string {
+    if (os === 'macos') return 'macOS (DMG)'
+    if (os === 'windows') return 'Windows (Installer)'
+    if (filename.endsWith('.AppImage')) return 'Linux (AppImage)'
+    if (filename.endsWith('.deb')) return 'Linux (DEB)'
+    if (filename.endsWith('.snap')) return 'Linux (Snap)'
+    return `Linux (${filename.split('.').pop()})`
+}
+
+function isPrimaryPackage(filename: string): boolean {
+    return filename.endsWith('.dmg') || filename.endsWith('.exe') || filename.endsWith('.AppImage')
+}
+
+async function fetchChecksums(assets: any[]): Promise<Record<string, string>> {
+    const checksums: Record<string, string> = {}
+    const ymlFiles = ['latest.yml', 'latest-mac.yml', 'latest-linux.yml']
+    
+    // Find URL for each yml file
+    const fetchPromises = ymlFiles.map(async (filename) => {
+        const asset = assets.find((a: any) => a.name === filename)
+        if (!asset) return
+
+        try {
+            const res = await fetch(asset.browser_download_url)
+            if (!res.ok) return
+            const text = await res.text()
+            
+            // Simple parsing for sha512: <hash>
+            // We look for "sha512: <base64string>"
+            // Or "  sha512: <base64string>" under a file entry
+            
+            // Matches: sha512: <hash> (globally or per file)
+            // Ideally we map filename -> sha512.
+            // Format example:
+            // files:
+            //   - url: <filename>
+            //     sha512: <hash>
+            
+            const lines = text.split('\n')
+            let currentFile = ''
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim()
+                if (line.startsWith('url:')) {
+                    currentFile = line.replace('url:', '').trim()
+                } else if (line.startsWith('- url:')) {
+                    currentFile = line.replace('- url:', '').trim()
+                } else if (line.startsWith('sha512:')) {
+                    const hash = line.replace('sha512:', '').trim()
+                    if (currentFile && hash) {
+                        checksums[currentFile] = `sha512:${hash}`
+                    }
+                }
+            }
+        } catch (err) {
+            console.error(`Failed to fetch checksums from ${filename}`, err)
+        }
+    })
+    
+    await Promise.all(fetchPromises)
+    return checksums
+}
+
+async function getLatestRelease() {
+    const CACHE_KEY = 'lumosnap_latest_release'
+    const CACHE_TIME_KEY = 'lumosnap_latest_release_time'
+    const CACHE_DURATION = 30 * 60 * 1000 // 30 minutes
+
+    try {
+        // Check cache first
+        const cachedTime = localStorage.getItem(CACHE_TIME_KEY)
+        if (cachedTime) {
+            const age = Date.now() - parseInt(cachedTime, 10)
+            if (age < CACHE_DURATION) {
+                const cachedData = localStorage.getItem(CACHE_KEY)
+                if (cachedData) {
+                    const data = JSON.parse(cachedData)
+                    downloadPackages.value = data.packages
+                    releaseVersion.value = data.version
+                    return
+                }
+            }
+        }
+
+        const response = await fetch('https://api.github.com/repos/lumosnap/lumo-desktop/releases/latest')
+        if (!response.ok) throw new Error('Failed to fetch release')
+        
+        const release = await response.json()
+        
+        // Fetch checksums from YML files
+        const checksums = await fetchChecksums(release.assets)
+
+        const packages = release.assets
+            .map((asset: any) => {
+                const os = detectPlatform(asset.name)
+                // Filter out blockmap files and unknown platforms
+                if (os === 'unknown' || asset.name.endsWith('.blockmap') || asset.name.endsWith('.iso')) return null
+                
+                // Get checksum: prioritize digest from API (if available), then parsed YML
+                let checksum = asset.digest || checksums[asset.name] || ''
+                
+                return {
+                    name: getDownloadName(asset.name, os),
+                    filename: asset.name,
+                    url: asset.browser_download_url,
+                    size: formatBytes(asset.size),
+                    checksum: checksum,
+                    os: os,
+                    isPrimary: isPrimaryPackage(asset.name)
+                }
+            })
+            .filter((p: any) => p !== null) as DownloadPackage[]
+            
+        // Sort packages to keep a consistent order (mac, win, linux-appimage, others etc if desired, but default returned order is usually alphabetical or upload order. 
+        // We can sort by OS priority for display if needed: Mac, Windows, Linux)
+        // For now, simple filter is enough.
+        
+        if (packages.length > 0) {
+            downloadPackages.value = packages
+            releaseVersion.value = release.tag_name
+            
+            // Cache the result
+            localStorage.setItem(CACHE_KEY, JSON.stringify({ packages, version: release.tag_name }))
+            localStorage.setItem(CACHE_TIME_KEY, Date.now().toString())
+        }
+    } catch (error) {
+        console.error('Failed to fetch latest release:', error)
+        // Keep using default hardcoded values if fetch fails
+    }
+}
 
 // Get primary download for current OS
 const currentOSDownload = computed(() => {
     const os = detectedOS.value
-    return downloadPackages.find(pkg => pkg.os === os && pkg.isPrimary) || downloadPackages[0]
+    return downloadPackages.value.find(pkg => pkg.os === os && pkg.isPrimary) || downloadPackages.value[0]
 })
 
 // Get OS display name
@@ -361,6 +492,8 @@ watch(() => props.step, async (newStep) => {
 onMounted(async () => {
     // Detect OS on mount
     detectedOS.value = detectOS()
+    // Fetch latest release
+    await getLatestRelease()
     
     await nextTick()
     
@@ -438,7 +571,7 @@ const download = async () => {
     // Trigger actual download
     const pkg = currentOSDownload.value
     if (pkg) {
-        window.open(pkg.url, '_blank')
+        window.open(pkg.url, '_blank') // Use window.open for explicit new tab/download
     }
     
     // Show loading feedback
@@ -449,6 +582,10 @@ const download = async () => {
 
 const launchApp = () => {
     window.location.href = 'lumosnap://open'
+}
+
+const openUrl = (url: string) => {
+    if (url) window.open(url, '_blank')
 }
 
 // Enter key handlers
@@ -625,22 +762,22 @@ const onInstaEnter = () => {
                         <p class="modal-desc">Choose the right package for your operating system.</p>
                         
                         <div class="packages-list">
-                            <div v-for="pkg in downloadPackages" :key="pkg.filename" class="package-item">
+                            <div v-for="pkg in downloadPackages" :key="pkg.filename" class="package-item" @click="openUrl(pkg.url)">
                                 <div class="package-info">
                                     <div class="package-header">
                                         <span class="package-name">{{ pkg.name }}</span>
                                         <span class="package-size">{{ pkg.size }}</span>
                                     </div>
                                     <div class="package-filename">{{ pkg.filename }}</div>
-                                    <div class="package-checksum">
+                                    <div class="package-checksum" v-if="pkg.checksum">
                                         <span class="checksum-text">{{ pkg.checksum }}</span>
-                                        <button class="copy-btn" @click="copyChecksum(pkg.checksum)" :title="copiedChecksum === pkg.checksum ? 'Copied!' : 'Copy checksum'">
+                                        <button class="copy-btn" @click.stop="copyChecksum(pkg.checksum)" :title="copiedChecksum === pkg.checksum ? 'Copied!' : 'Copy checksum'">
                                             <Check v-if="copiedChecksum === pkg.checksum" :size="14" class="c-green" />
                                             <Copy v-else :size="14" />
                                         </button>
                                     </div>
                                 </div>
-                                <a :href="pkg.url" class="package-download" target="_blank" rel="noopener">
+                                <a :href="pkg.url" class="package-download" target="_blank" rel="noopener" @click.stop>
                                     <Download :size="16" />
                                 </a>
                             </div>
