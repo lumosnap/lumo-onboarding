@@ -2,6 +2,7 @@
 import { ref, watch, computed, nextTick, onMounted } from 'vue'
 import { Loader2, Check, ArrowRight, Instagram, Monitor, Laptop, Zap, Apple, X, Download, Copy, ExternalLink } from 'lucide-vue-next'
 import { createAuthClient } from "better-auth/vue"
+import { clearPendingDeviceAuth, getPendingDeviceAuth } from '~/composables/usePendingDeviceAuth'
 
 // useRoute is auto-imported in Nuxt 4
 const route = useRoute()
@@ -314,6 +315,20 @@ const callbackUrl = computed(() => {
     return callback ? decodeURIComponent(callback) : null
 })
 
+const redirectToPendingDeviceIfNeeded = async (): Promise<boolean> => {
+    if (callbackUrl.value || !session.value?.data?.user) return false
+
+    const pending = getPendingDeviceAuth()
+    if (!pending || pending.fromPath !== '/device') return false
+
+    clearPendingDeviceAuth()
+    await navigateTo({
+        path: '/device',
+        query: pending.userCode ? { user_code: pending.userCode } : undefined
+    })
+    return true
+}
+
 /**
  * Base64 encode a string (URL-safe)
  */
@@ -481,6 +496,11 @@ const instaInput = ref<HTMLInputElement | null>(null)
 
 // Watch step changes to auto-focus
 watch(() => props.step, async (newStep) => {
+    if (newStep === 4) {
+        const redirected = await redirectToPendingDeviceIfNeeded()
+        if (redirected) return
+    }
+
     await nextTick()
     if (newStep === 2) {
         businessInput.value?.focus()
