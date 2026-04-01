@@ -11,8 +11,10 @@ type ValidationState = 'idle' | 'validating' | 'valid' | 'invalid'
 type ActionState = 'idle' | 'approving' | 'denying' | 'approved' | 'denied'
 
 const route = useRoute()
+const runtimeConfig = useRuntimeConfig()
+const apiBaseUrl = runtimeConfig.public.apiBaseUrl.replace(/\/+$/, '')
 const authClient = createAuthClient({
-  baseURL: `${useRuntimeConfig().public.apiBaseUrl}/auth`
+  baseURL: `${apiBaseUrl}/auth`
 })
 const session = authClient.useSession()
 
@@ -89,7 +91,7 @@ const validateCode = async () => {
 
   try {
     const response = await fetch(
-      `${useRuntimeConfig().public.apiBaseUrl}/api/auth/device?user_code=${encodeURIComponent(normalizedCode)}`,
+      `${apiBaseUrl}/auth/device?user_code=${encodeURIComponent(normalizedCode)}`,
       { method: 'GET' }
     )
     const payload = await response.json().catch(() => null)
@@ -128,7 +130,7 @@ const performDecision = async (decision: 'approve' | 'deny') => {
   actionState.value = decision === 'approve' ? 'approving' : 'denying'
 
   try {
-    const response = await fetch(`${useRuntimeConfig().public.apiBaseUrl}/api/auth/device/${decision}`, {
+    const response = await fetch(`${apiBaseUrl}/auth/device/${decision}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
